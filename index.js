@@ -11,7 +11,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const client = new Client({
   authStrategy: new LocalAuth(),
-  puppeteer: { args: ['--no-sandbox'] }
+  puppeteer: { args: ['--no-sandbox', '--ignore-certificate-errors', '--disable-setuid-sandbox'] }
 });
 
 let waReady = false;
