@@ -2,7 +2,7 @@ const express = require('express');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
-const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -14,6 +14,7 @@ app.use(express.json({ limit: '1mb' }));
 
 let sock = null;
 let waReady = false;
+let latestQR = null;
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -29,8 +30,8 @@ async function connectToWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log('\nEscanea este QR con tu WhatsApp personal:\n');
-      qrcode.generate(qr, { small: true });
+      latestQR = qr;
+      console.log('Nuevo QR generado — visita /qr para escanearlo');
     }
 
     if (connection === 'close') {
@@ -53,6 +54,18 @@ connectToWhatsApp().catch(err => console.error('WA init error:', err));
 
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'solar-design-webhook', whatsapp: waReady ? 'ready' : 'not_ready' });
+});
+
+app.get('/qr', async (_req, res) => {
+  if (waReady) return res.send('<h2>✅ WhatsApp ya está conectado</h2>');
+  if (!latestQR) return res.send('<h2>⏳ Generando QR, recarga en 5 segundos...</h2><meta http-equiv="refresh" content="5">');
+  const img = await QRCode.toDataURL(latestQR, { scale: 8 });
+  res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="20"><title>WhatsApp QR</title></head>
+<body style="display:flex;flex-direction:column;align-items:center;font-family:sans-serif;padding:40px">
+<h2>Escanea con WhatsApp → Dispositivos vinculados</h2>
+<img src="${img}" style="width:300px;height:300px"/>
+<p style="color:gray">Se renueva automáticamente cada 20s</p>
+</body></html>`);
 });
 
 app.post('/webhook/solar-design', async (req, res) => {
