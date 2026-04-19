@@ -1,59 +1,59 @@
 const express = require('express');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const { Boom } = require('@hapi/boom');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const webhookSecret = process.env.WEBHOOK_SECRET || 'change-me';
 const whatsappGroup = process.env.WHATSAPP_GROUP || '120363191007710197@g.us';
-const sessionPath = process.env.SESSION_PATH || undefined;
+const sessionPath = process.env.SESSION_PATH || './session';
 
 app.use(express.json({ limit: '1mb' }));
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: sessionPath }),
-  puppeteer: {
-    args: [
-      '--no-sandbox',
-      '--ignore-certificate-errors',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage'
-    ]
-  }
-});
-
+let sock = null;
 let waReady = false;
 
-client.on('qr', (qr) => {
-  console.log('\nEstcanea este QR con tu WhatsApp personal:\n');
-  qrcode.generate(qr, { small: true });
-});
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+  const { version } = await fetchLatestBaileysVersion();
 
-client.on('ready', () => {
-  waReady = true;
-  console.log('✅ WhatsApp conectado y listo');
-});
+  sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: true,
+    logger: pino({ level: 'silent' })
+  });
 
-client.on('disconnected', () => {
-  waReady = false;
-  console.log('⚠️  WhatsApp desconectado');
-});
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
 
-client.initialize();
+    if (connection === 'close') {
+      waReady = false;
+      const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const shouldReconnect = code !== DisconnectReason.loggedOut;
+      console.log('Conexión cerrada, código:', code, '— reconectar:', shouldReconnect);
+      if (shouldReconnect) connectToWhatsApp();
+      else console.log('Sesión expirada. Borra la carpeta session y reinicia.');
+    } else if (connection === 'open') {
+      waReady = true;
+      console.log('✅ WhatsApp conectado y listo');
+    }
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+}
+
+connectToWhatsApp().catch(err => console.error('WA init error:', err));
 
 app.get('/', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'solar-design-webhook',
-    whatsapp: waReady ? 'ready' : 'not_ready'
-  });
+  res.json({ ok: true, service: 'solar-design-webhook', whatsapp: waReady ? 'ready' : 'not_ready' });
 });
 
 app.post('/webhook/solar-design', async (req, res) => {
   const auth = req.headers.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const headerSecret = req.headers['x-webhook-secret'];
-  const providedSecret = bearer || headerSecret;
+  const providedSecret = bearer || req.headers['x-webhook-secret'];
 
   if (!providedSecret || providedSecret !== webhookSecret) {
     return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -90,7 +90,7 @@ app.post('/webhook/solar-design', async (req, res) => {
   ].join('\n');
 
   try {
-    await client.sendMessage(whatsappGroup, message);
+    await sock.sendMessage(whatsappGroup, { text: message });
     console.log(JSON.stringify({ event: 'solar_design_sent', appointmentId: body.id }));
     return res.status(200).json({ ok: true, sent: true, appointmentId: body.id });
   } catch (err) {
