@@ -6,12 +6,20 @@ const app = express();
 const port = process.env.PORT || 3000;
 const webhookSecret = process.env.WEBHOOK_SECRET || 'change-me';
 const whatsappGroup = process.env.WHATSAPP_GROUP || '120363191007710197@g.us';
+const sessionPath = process.env.SESSION_PATH || undefined;
 
 app.use(express.json({ limit: '1mb' }));
 
 const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: { args: ['--no-sandbox', '--ignore-certificate-errors', '--disable-setuid-sandbox'] }
+  authStrategy: new LocalAuth({ dataPath: sessionPath }),
+  puppeteer: {
+    args: [
+      '--no-sandbox',
+      '--ignore-certificate-errors',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ]
+  }
 });
 
 let waReady = false;
