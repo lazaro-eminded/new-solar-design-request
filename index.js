@@ -3,6 +3,9 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
 const webhookSecret = process.env.WEBHOOK_SECRET || 'change-me';
+const bridgeUrl = process.env.BRIDGE_URL || 'http://127.0.0.1:8787';
+const bridgeToken = process.env.BRIDGE_TOKEN || 'testbridge123';
+const whatsappGroup = process.env.WHATSAPP_GROUP || '120363191007710197@g.us';
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -14,7 +17,7 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.post('/webhook/solar-design', (req, res) => {
+app.post('/webhook/solar-design', async (req, res) => {
   const auth = req.headers.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const headerSecret = req.headers['x-webhook-secret'];
@@ -50,20 +53,36 @@ app.post('/webhook/solar-design', (req, res) => {
     'Por favor crear el diseño en Aurora y asignarlo a este vendedor.'
   ].join('\n');
 
-  // Placeholder for next step: dispatch to OpenClaw / WhatsApp group.
-  console.log(JSON.stringify({
-    event: 'solar_design_request',
-    appointmentId: body.id,
-    contactId: body.contactId,
-    message
-  }, null, 2));
+  try {
+    const resp = await fetch(`${bridgeUrl}/send-whatsapp-group`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${bridgeToken}`
+      },
+      body: JSON.stringify({ target: whatsappGroup, message })
+    });
 
-  return res.status(200).json({
-    ok: true,
-    received: true,
-    appointmentId: body.id,
-    previewMessage: message
-  });
+    const result = await resp.json().catch(() => ({}));
+
+    console.log(JSON.stringify({
+      event: 'solar_design_request',
+      appointmentId: body.id,
+      contactId: body.contactId,
+      bridgeStatus: resp.status,
+      bridgeResult: result
+    }));
+
+    return res.status(200).json({
+      ok: true,
+      dispatched: true,
+      appointmentId: body.id,
+      bridgeStatus: resp.status
+    });
+  } catch (err) {
+    console.error('bridge_error', err.message);
+    return res.status(502).json({ ok: false, error: 'bridge_unreachable', detail: err.message });
+  }
 });
 
 app.listen(port, () => {
