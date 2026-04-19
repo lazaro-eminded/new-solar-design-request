@@ -2,6 +2,7 @@ const express = require('express');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
+const qrcode = require('qrcode-terminal');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,12 +22,16 @@ async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true,
     logger: pino({ level: 'silent' })
   });
 
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('\nEscanea este QR con tu WhatsApp personal:\n');
+      qrcode.generate(qr, { small: true });
+    }
 
     if (connection === 'close') {
       waReady = false;
