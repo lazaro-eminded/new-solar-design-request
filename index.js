@@ -88,7 +88,8 @@ app.post('/webhook/solar-design', async (req, res) => {
   }
 
   if ((body.calendarName || '').toLowerCase() !== 'solar') {
-    return res.status(200).json({ ok: true, skipped: true, reason: 'not_solar_calendar' });
+    console.log('not_solar_calendar — calendarName recibido:', JSON.stringify(body.calendarName));
+    return res.status(200).json({ ok: true, skipped: true, reason: 'not_solar_calendar', calendarName: body.calendarName });
   }
 
   if (!waReady) {
