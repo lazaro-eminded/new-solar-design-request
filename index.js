@@ -1,19 +1,43 @@
 const express = require('express');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const webhookSecret = process.env.WEBHOOK_SECRET || 'change-me';
-const bridgeUrl = process.env.BRIDGE_URL || 'http://127.0.0.1:8787';
-const bridgeToken = process.env.BRIDGE_TOKEN || 'testbridge123';
 const whatsappGroup = process.env.WHATSAPP_GROUP || '120363191007710197@g.us';
 
 app.use(express.json({ limit: '1mb' }));
+
+const client = new Client({
+  authStrategy: new LocalAuth(),
+  puppeteer: { args: ['--no-sandbox'] }
+});
+
+let waReady = false;
+
+client.on('qr', (qr) => {
+  console.log('\nEstcanea este QR con tu WhatsApp personal:\n');
+  qrcode.generate(qr, { small: true });
+});
+
+client.on('ready', () => {
+  waReady = true;
+  console.log('✅ WhatsApp conectado y listo');
+});
+
+client.on('disconnected', () => {
+  waReady = false;
+  console.log('⚠️  WhatsApp desconectado');
+});
+
+client.initialize();
 
 app.get('/', (_req, res) => {
   res.json({
     ok: true,
     service: 'solar-design-webhook',
-    status: 'running'
+    whatsapp: waReady ? 'ready' : 'not_ready'
   });
 });
 
@@ -41,6 +65,10 @@ app.post('/webhook/solar-design', async (req, res) => {
     return res.status(200).json({ ok: true, skipped: true, reason: 'not_solar_calendar' });
   }
 
+  if (!waReady) {
+    return res.status(503).json({ ok: false, error: 'whatsapp_not_ready' });
+  }
+
   const message = [
     '🚨 NUEVO DISEÑO SOLAR',
     '',
@@ -54,34 +82,12 @@ app.post('/webhook/solar-design', async (req, res) => {
   ].join('\n');
 
   try {
-    const resp = await fetch(`${bridgeUrl}/send-whatsapp-group`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${bridgeToken}`
-      },
-      body: JSON.stringify({ target: whatsappGroup, message })
-    });
-
-    const result = await resp.json().catch(() => ({}));
-
-    console.log(JSON.stringify({
-      event: 'solar_design_request',
-      appointmentId: body.id,
-      contactId: body.contactId,
-      bridgeStatus: resp.status,
-      bridgeResult: result
-    }));
-
-    return res.status(200).json({
-      ok: true,
-      dispatched: true,
-      appointmentId: body.id,
-      bridgeStatus: resp.status
-    });
+    await client.sendMessage(whatsappGroup, message);
+    console.log(JSON.stringify({ event: 'solar_design_sent', appointmentId: body.id }));
+    return res.status(200).json({ ok: true, sent: true, appointmentId: body.id });
   } catch (err) {
-    console.error('bridge_error', err.message);
-    return res.status(502).json({ ok: false, error: 'bridge_unreachable', detail: err.message });
+    console.error('whatsapp_send_error', err.message);
+    return res.status(500).json({ ok: false, error: 'send_failed', detail: err.message });
   }
 });
 
