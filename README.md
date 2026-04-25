@@ -16,6 +16,8 @@ Usa uno de estos:
 
 - `WEBHOOK_SECRET` = secreto compartido para HighLevel
 - `PORT` = puerto del servicio (Railway lo inyecta)
+- `DEDUPE_TTL_DAYS` = ventana en días para evitar reenviar diseños a la misma dirección (default: `90`)
+- `DEDUPE_STORE_PATH` = ruta del archivo JSON donde se persiste la dedupe (default: `/data/sent-addresses.json`, apunta al Railway Volume)
 
 ## Body esperado
 
@@ -45,8 +47,21 @@ Usa uno de estos:
 - valida tipo de evento
 - valida que sea calendario Solar
 - valida que la cita esté Confirmed
+- deduplica por `fullAddress` normalizada dentro de la ventana `DEDUPE_TTL_DAYS` (default 90 días)
+- persiste la dedupe en `DEDUPE_STORE_PATH` para sobrevivir a reinicios / deploys
 - arma el mensaje de diseño
 - responde con preview del mensaje
+
+## Persistencia de dedupe (Railway Volume)
+
+Para que la ventana de 90 días sobreviva a redeploys o restarts, monta un Railway Volume:
+
+1. En Railway → el servicio → **Volumes** → New Volume
+2. Mount path: `/data`
+3. Tamaño: 1 GB es más que suficiente
+4. (opcional) Override `DEDUPE_STORE_PATH` si usas otro mount
+
+Si no montas volumen, el servicio sigue funcionando: cargará la memoria vacía al iniciar y sólo loggeará un warning al intentar persistir.
 
 ## Railway deploy
 

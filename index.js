@@ -1,8 +1,62 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const webhookSecret = process.env.WEBHOOK_SECRET || 'change-me';
+const dedupeTtlDays = Number(process.env.DEDUPE_TTL_DAYS || 90);
+const dedupeTtlMs = dedupeTtlDays * 24 * 60 * 60 * 1000;
+const dedupeStorePath = process.env.DEDUPE_STORE_PATH || '/data/sent-addresses.json';
+
+const sentAddresses = loadStore(dedupeStorePath);
+
+function loadStore(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const entries = Object.entries(parsed).filter(([, ts]) => typeof ts === 'number');
+    console.log(`dedupe: loaded ${entries.length} entries from ${filePath}`);
+    return new Map(entries);
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      console.log(`dedupe: no existing store at ${filePath}, starting empty`);
+    } else {
+      console.warn(`dedupe: failed to load store (${err.code || err.message}), starting empty`);
+    }
+    return new Map();
+  }
+}
+
+function persistStore() {
+  const obj = Object.fromEntries(sentAddresses);
+  const tmp = `${dedupeStorePath}.tmp`;
+  fs.promises
+    .mkdir(path.dirname(dedupeStorePath), { recursive: true })
+    .then(() => fs.promises.writeFile(tmp, JSON.stringify(obj)))
+    .then(() => fs.promises.rename(tmp, dedupeStorePath))
+    .catch((err) => {
+      console.warn(`dedupe: failed to persist store (${err.code || err.message})`);
+    });
+}
+
+function normalizeAddress(address) {
+  return String(address || '')
+    .toLowerCase()
+    .replace(/[.,#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function wasRecentlySent(key, now) {
+  const sentAt = sentAddresses.get(key);
+  if (!sentAt) return false;
+  if (now - sentAt > dedupeTtlMs) {
+    sentAddresses.delete(key);
+    return false;
+  }
+  return true;
+}
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -37,6 +91,25 @@ app.post('/webhook/solar-design', (req, res) => {
   if ((body.calendarName || '').toLowerCase() !== 'solar') {
     return res.status(200).json({ ok: true, skipped: true, reason: 'not_solar_calendar' });
   }
+
+  const addressKey = normalizeAddress(body.fullAddress);
+  const now = Date.now();
+
+  if (!addressKey) {
+    return res.status(200).json({ ok: true, skipped: true, reason: 'missing_address' });
+  }
+
+  if (wasRecentlySent(addressKey, now)) {
+    return res.status(200).json({
+      ok: true,
+      skipped: true,
+      reason: 'duplicate_address_within_ttl',
+      ttlDays: dedupeTtlDays
+    });
+  }
+
+  sentAddresses.set(addressKey, now);
+  persistStore();
 
   const message = [
     '🚨 NUEVO DISEÑO SOLAR',
